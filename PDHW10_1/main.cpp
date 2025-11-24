@@ -13,6 +13,7 @@ using namespace std;
 const int PLATE_LENGTH = 7;
 const int BRAND_MAX_LENGTH = 20;
 const int BASIC_LEVEL_LIMIT = 3;
+const int ABANDONED_LEVEL = 0;
 const int BASICSTATION_LEVEL = 1;
 const int ADVANCEDSTATION_LEVEL = 2;
 const int ADVANCEDSTATION_SERVICE_CHARGE = 500;
@@ -25,6 +26,7 @@ struct Car {
     int dailyRent;
     int mileage;
     int stationid;
+    int day_order_exist;
 };
 
 struct Order {
@@ -41,7 +43,7 @@ struct Order {
 class Station {
   protected:
     int station_id;    // 1-based
-    int station_level; // 1:Basic, 2:Advanced
+    int station_level; // 0:abandoned, 1:Basic, 2:Advanced
     int total_cars;
     int total_cars_limit;
     Car **carAddrs;
@@ -49,9 +51,9 @@ class Station {
   public:
     // constructor & destructor
     // revised_version compared with HW8: 用冒號在前面初始化變數
-    Station(int id, int K, int station_level)
+    Station(int id, int T, int K, int station_level)
         : station_id(id), station_level(station_level), total_cars(0),
-          total_cars_limit(K), carAddrs(new Car *[K]) {}
+          total_cars_limit(K), carAddrs(new Car *[T]) {}
     ~Station() { delete[] carAddrs; }
 
     // member function
@@ -82,7 +84,27 @@ class Station {
         else
             return false;
     }
-
+    virtual void Move_If_Station_full(Station* init_station){
+        if(total_cars <= total_cars_limit) return;
+        Car* latest_car = nullptr;
+        int latest_day = 0;
+        while(total_cars > total_cars_limit){
+            for(int i=0;i<total_cars;i++){
+                Car* current_car = this->carAddrs[i];
+                if(latest_car == nullptr){
+                    latest_car = current_car;
+                    latest_day = latest_car->day_order_exist;
+                    continue;
+                }
+                if(current_car->day_order_exist > latest_day){
+                    latest_car = current_car;
+                    latest_day = latest_car->day_order_exist;
+                }
+            }
+            init_station->addCar(latest_car);
+            this->removeCar(latest_car);
+        }
+    }
     // operator overloading
     const Station &operator+=(Car *carPtr) {
         addCar(carPtr);
@@ -100,22 +122,48 @@ class Station {
         }
         return nullptr;
     }
-    friend int count_revenue_algorithm(Order *orders, int N, int M,
+    friend int count_revenue_algorithm(Order *orders, int N, int M, int T,
                                        Station **stations);
 };
 
 class BasicStation : public Station {
   private:
   public:
-    BasicStation(int id, int T) : Station(id, T, BASICSTATION_LEVEL) {}
+    BasicStation(int id, int T, int K)
+        : Station(id, T, K, BASICSTATION_LEVEL) {}
+    void Move_If_Station_full(Station* init_station){
+        if(total_cars <= total_cars_limit) return;
+        Car* latest_car = nullptr;
+        int latest_day = 0;
+        while(total_cars > total_cars_limit){
+            for(int i=0;i<total_cars;i++){
+                Car* current_car = this->carAddrs[i];
+                if(latest_car == nullptr){
+                    latest_car = current_car;
+                    latest_day = latest_car->day_order_exist;
+                    continue;
+                }
+                if(current_car->day_order_exist > latest_day){
+                    latest_car = current_car;
+                    latest_day = latest_car->day_order_exist;
+                }
+            }
+            init_station->addCar(latest_car);
+            this->removeCar(latest_car);
+            latest_car = nullptr;
+            latest_day = 0;
+        }
+    }
     // bool get_Station_Status() 直接繼承母類別函式
 };
 
 class AdvancedStation : public Station {
   private:
   public:
-    AdvancedStation(int id, int T) : Station(id, T, ADVANCEDSTATION_LEVEL) {}
+    AdvancedStation(int id, int T, int K)
+        : Station(id, T, K, ADVANCEDSTATION_LEVEL) {}
     bool get_Station_Status() { return true; }
+    void Move_If_Station_full(Station* init_station){ return;}
 };
 
 // MARK: #4 Self_Defined_Class: CarsToAddBack
@@ -153,7 +201,8 @@ class CarsToAddBack {
         list[i + 1] = order;
         right_idx += 1;
     }
-    void remove_back_to_station(int current_day, Station **stations) {
+    void remove_back_to_station(int current_day, Station **stations, int T) {
+        // phase1: 移到暫存station
         while (left_idx < right_idx) {
             if (list[left_idx]->daytoaddback == current_day) {
                 Station *dest_station =
@@ -163,8 +212,7 @@ class CarsToAddBack {
                                          ADVANCEDSTATION_LEVEL);
                 bool is_low_level_car =
                     (returning_car->level <= BASIC_LEVEL_LIMIT);
-                bool has_space = dest_station->get_Station_Status();
-                if (is_advanced_dest || (is_low_level_car && has_space)) {
+                if (is_advanced_dest || is_low_level_car) {
                     dest_station->addCar(returning_car);
                     // test
                     // cout<<"return selected car "<<returning_car->plate<<"
@@ -183,7 +231,8 @@ class CarsToAddBack {
     }
 };
 // MARK: #5 Algorithm: Count the revenue
-int count_revenue_algorithm(Order *orders, int N, int M, Station **stations) {
+int count_revenue_algorithm(Order *orders, int N, int M, int T,
+                            Station **stations) {
     int total_revenue = 0;
     CarsToAddBack cars_to_add_back(M);
     for (int i = 1; i <= M; i++) {
@@ -213,6 +262,7 @@ int count_revenue_algorithm(Order *orders, int N, int M, Station **stations) {
                 }
             }
         }
+
         // Method2: 不能在原站拿，那就對每一個站進行訪問，可以的話就進行夜間調度
         if (selected_car == nullptr) {
             for (int j = 1; j <= N; j++) {
@@ -242,6 +292,7 @@ int count_revenue_algorithm(Order *orders, int N, int M, Station **stations) {
         }
         order.selected_car = selected_car;
         if (selected_car != nullptr) {
+            selected_car->day_order_exist = i;
             if (selected_station->get_Station_Level() ==
                 ADVANCEDSTATION_LEVEL) {
                 // cout<<"(with charge)revenue+"<<selected_car->dailyRent *
@@ -263,6 +314,7 @@ int count_revenue_algorithm(Order *orders, int N, int M, Station **stations) {
             origin_station->removeCar(selected_car);
             cars_to_add_back.add_to_list(&order);
         } else if (selected_car_otherstation != nullptr) {
+            selected_car_otherstation->day_order_exist = i;
             order.selected_car = selected_car_otherstation;
             Car *car = selected_car_otherstation;
             if (stations[order.originStation_id]->get_Station_Level() ==
@@ -290,7 +342,12 @@ int count_revenue_algorithm(Order *orders, int N, int M, Station **stations) {
             support_station->removeCar(car);
             cars_to_add_back.add_to_list(&order);
         }
-        cars_to_add_back.remove_back_to_station(i, stations);
+        // Ending Status Upload
+        cars_to_add_back.remove_back_to_station(i, stations, T);
+        for(int i=1;i<=N;i++){
+            if(stations[i]->station_level == ADVANCEDSTATION_LEVEL) continue;
+            stations[i]->Move_If_Station_full(stations[1]);
+        }
     }
     return total_revenue;
 }
@@ -306,14 +363,16 @@ int main() {
     int AdvancedStationId = 0;
     for (int i = 0; i < NumofAdvancedStation; i++) {
         cin >> AdvancedStationId;
-        stations[AdvancedStationId] = new AdvancedStation(AdvancedStationId, T);
+        stations[AdvancedStationId] =
+            new AdvancedStation(AdvancedStationId, T, T);
     }
     for (int i = 1; i <= N; i++)
         if (stations[i] == nullptr)
-            stations[i] = new BasicStation(i, K);
+            stations[i] = new BasicStation(i, T, K);
 
     Car *cars = new Car[T + 1];
     for (int i = 1; i <= T; i++) {
+        cars[i].day_order_exist = 0;
         cin >> cars[i].plate >> cars[i].brand >> cars[i].level >>
             cars[i].dailyRent >> cars[i].mileage >> cars[i].stationid;
         stations[cars[i].stationid]->addCar(&cars[i]);
@@ -331,7 +390,7 @@ int main() {
         orders[i].order_id = i;
         orders[i].selected_car = nullptr;
     }
-    int revenue = count_revenue_algorithm(orders, N, M, stations);
+    int revenue = count_revenue_algorithm(orders, N, M, T, stations);
     // Output
     cout << revenue;
 
